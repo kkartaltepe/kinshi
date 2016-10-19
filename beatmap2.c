@@ -23,6 +23,17 @@ typedef struct hit_obj {
 	int repeats,length;
 } hit_obj_t;
 
+typedef struct osz_data {
+	zip_t* zip;
+
+	size_t maps_num;
+	uint64_t maps[MAX_OSU_FILE_NUM];
+} osz_data_t;
+
+void free_osz_data(osz_data_t* osz) {
+	zip_close(osz->zip);
+}
+
 typedef struct beatmap {
 	char* name;
 
@@ -71,7 +82,7 @@ uint64_t zip_find_by_extension(zip_t* zip, uint64_t* ind_buf, size_t buff_size, 
 	return matches;
 }
 
-int parse_beatmap(char* file_buf, uint64_t file_size, beatmap_t* beatmap) {
+int parse_beatmap_data(char* file_buf, uint64_t file_size, beatmap_t* beatmap) {
 	const char* cursor = file_buf;
 
 	int version = -1;
@@ -178,7 +189,58 @@ int parse_beatmap(char* file_buf, uint64_t file_size, beatmap_t* beatmap) {
 	return 0;
 }
 
-int parse_osz( const char* osz) {
+int parse_beatmap(osz_data_t* osz, uint64_t beatmap_num, beatmap_t* beatmap) {
+	if(osz == NULL) {
+		fprintf(stderr, "parse_beatmap called with invalid osz data\n");
+	}
+
+	if(beatmap_num >= osz->maps_num || beatmap_num < 0) {
+		fprintf(stderr, "Invalid beatmap number %"PRIu64" must be between 0 and %"PRIu64"\n", beatmap_num, osz->maps_num-1);
+		return -1;
+	}
+
+	zip_stat_t stat = {0};
+	if(zip_stat_index(osz->zip, osz->maps[beatmap_num], 0, &stat) != 0) {
+		fprintf(stderr, "Failed to stat osu file at index %"PRIu64": %s\n", osz->maps[beatmap_num], zip_strerror(osz->zip));
+		return -1;
+	}
+
+	char* file_buf = NULL;
+	if((file_buf = malloc(stat.size)) == NULL) {
+		fprintf(stderr, "Failed to allocate %"PRIu64" bytes for .osu file\n", stat.size);
+		return -1;
+	}
+
+	zip_file_t* zip_file;
+	if((zip_file = zip_fopen_index(osz->zip, osz->maps[beatmap_num], 0)) == NULL) {
+		fprintf(stderr, "Failed to read file '%s': %s\n", stat.name, zip_strerror(osz->zip));
+		return -1;
+	}
+	
+	zip_fread(zip_file, file_buf, stat.size); // Slurp it up.
+	
+	printf("Parsing beatmap '%s'\n", stat.name);
+	parse_beatmap_data(file_buf, stat.size, beatmap);
+
+	free(file_buf);
+	zip_fclose(zip_file);
+
+	int circles=0, sliders=0, spinners=0;
+	for(int i = 0; i < beatmap->hit_objs_num; ++i) {
+		if(beatmap->hit_objs[i].type == HIT_TYPE_CIRCLE) {
+			circles++;
+		} else if(beatmap->hit_objs[i].type == HIT_TYPE_SLIDER) {
+			sliders++;
+		} else {
+			spinners++;
+		}
+	}
+	printf("Map has %i circles, %i sliders, %i spinners\n", circles, sliders, spinners);
+
+	return 0;
+}
+
+int parse_osz(const char* osz, osz_data_t* osz_data) {
 	int err = 0;
 	zip_t* zip = NULL;
 
@@ -189,55 +251,10 @@ int parse_osz( const char* osz) {
 		return -1;
 	}
 
-	uint64_t osu_file_idx[MAX_OSU_FILE_NUM];
-	uint64_t osu_file_num = zip_find_by_extension(zip, osu_file_idx, MAX_OSU_FILE_NUM, ".osu");
-
-	for(uint64_t i = 0; i < osu_file_num; i++) {
-		// printf("%"PRIu64") %s\n", i, zip_get_name(zip, osu_file_ind[i], ZIP_FL_ENC_GUESS));
-		zip_stat_t stat = {0};
-		if(zip_stat_index(zip, osu_file_idx[i], 0, &stat) != 0) {
-			fprintf(stderr, "Failed to stat osu file at index %"PRIu64": %s\n", osu_file_idx[i], zip_strerror(zip));
-			return -1;
-		}
-
-		char* file_buf = NULL;
-		if((file_buf = malloc(stat.size)) == NULL) {
-			fprintf(stderr, "Failed to allocate %"PRIu64" bytes for .osu file\n", stat.size);
-			return -1;
-		}
-
-		zip_file_t* zip_file;
-		if((zip_file = zip_fopen_index(zip, osu_file_idx[i], 0)) == NULL) {
-			fprintf(stderr, "Failed to read file '%s': %s\n", stat.name, zip_strerror(zip));
-			return -1;
-		}
-		
-		zip_fread(zip_file, file_buf, stat.size); // Slurp it up.
-		beatmap_t b = {0}; b.hit_objs_num = -1;
-		printf("Parsing beatmap '%s'\n", stat.name);
-		parse_beatmap(file_buf, stat.size, &b);
-
-		int circles=0, sliders=0, spinners=0;
-		for(int i = 0; i < b.hit_objs_num; ++i) {
-			if(b.hit_objs[i].type == HIT_TYPE_CIRCLE) {
-				circles++;
-			} else if(b.hit_objs[i].type == HIT_TYPE_SLIDER) {
-				sliders++;
-			} else {
-				spinners++;
-			}
-		}
-		printf("Map has %i circles, %i sliders, %i spinners\n", circles, sliders, spinners);
-
-		free_beatmap_data(&b);
-		free(file_buf);
-		zip_fclose(zip_file);
-	}
-
-	zip_close(zip);
+	osz_data->maps_num = zip_find_by_extension(zip, osz_data->maps, MAX_OSU_FILE_NUM, ".osu");
+	osz_data->zip = zip;
 
 	return 0;
-
 }
 
 int main(int argc, char** argv) {
@@ -245,6 +262,12 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "Please reference exactly 1 osz file to parse\n");
 		return -1;
 	}
+	osz_data_t osz = {0};
+	beatmap_t b = {0};
 
-	return parse_osz(argv[1]);
+	parse_osz(argv[1], &osz);
+	parse_beatmap(&osz, 0, &b);
+
+	free_osz_data(&osz);
+	free_beatmap_data(&b);
 }
