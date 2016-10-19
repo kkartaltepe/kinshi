@@ -225,18 +225,6 @@ int parse_beatmap(osz_data_t* osz, uint64_t beatmap_num, beatmap_t* beatmap) {
 	free(file_buf);
 	zip_fclose(zip_file);
 
-	int circles=0, sliders=0, spinners=0;
-	for(int i = 0; i < beatmap->hit_objs_num; ++i) {
-		if(beatmap->hit_objs[i].type == HIT_TYPE_CIRCLE) {
-			circles++;
-		} else if(beatmap->hit_objs[i].type == HIT_TYPE_SLIDER) {
-			sliders++;
-		} else {
-			spinners++;
-		}
-	}
-	printf("Map has %i circles, %i sliders, %i spinners\n", circles, sliders, spinners);
-
 	return 0;
 }
 
@@ -267,6 +255,18 @@ int main(int argc, char** argv) {
 
 	parse_osz(argv[1], &osz);
 	parse_beatmap(&osz, 0, &b);
+
+	int circles=0, sliders=0, spinners=0;
+	for(int i = 0; i < b.hit_objs_num; ++i) {
+		if(b.hit_objs[i].type == HIT_TYPE_CIRCLE) {
+			circles++;
+		} else if(b.hit_objs[i].type == HIT_TYPE_SLIDER) {
+			sliders++;
+		} else {
+			spinners++;
+		}
+	}
+	printf("Map has %i circles, %i sliders, %i spinners\n", circles, sliders, spinners);
 
 	free_osz_data(&osz);
 	free_beatmap_data(&b);
