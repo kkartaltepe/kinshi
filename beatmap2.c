@@ -8,16 +8,16 @@
 
 
 #define MAX_OSU_FILE_NUM 64
-#define MAX_OSU_FILE_SIZE 10*1024*1024
 #define MAX_HIT_OBJS 4096
 
 
 #define HIT_TYPE_CIRCLE 1
 #define HIT_TYPE_SLIDER 2
+#define HIT_TYPE_SPINNER 8
+
 typedef struct hit_obj {
 	double x,y,time; // Double for calculations
-	int combo,hitsound;
-	int type;
+	int type,hitsound;
 	// Slider only fields
 	int slider_type;
 	int repeats,length;
@@ -97,14 +97,14 @@ int parse_beatmap(char* file_buf, uint64_t file_size, beatmap_t* beatmap) {
 					beatmap->hit_objs_num = 0;
 
 					double x,y,time;
-					int combo,hs,bytes_read=0;
+					int type,hs,bytes_read=0;
 					char stype;
 					// sscanf(cursor+1, "%lf,%lf,%lf,%i,%i,%c%n", &x, &y, &time, &combo, &hs, &stype, &bytes_read);
 					// printf("%.20s consumes %i\n", cursor+1, bytes_read);
 					while(cursor != NULL && cursor < file_buf+file_size-1
-					      && sscanf(cursor+1, "%lf,%lf,%lf,%i,%i,%c%n", &x, &y, &time, &combo, &hs, &stype, &bytes_read) == 6) {
+					      && sscanf(cursor+1, "%lf,%lf,%lf,%i,%i,%c%n", &x, &y, &time, &type, &hs, &stype, &bytes_read) == 6) {
 						if(beatmap->hit_objs_num < MAX_HIT_OBJS) {
-							if(stype > 'A' && stype < 'Z') {
+							if(type & HIT_TYPE_SLIDER) {
 								cursor+=bytes_read+1;
 								int side_effect;
 								while(cursor != NULL && cursor < file_buf+file_size-1
@@ -116,12 +116,17 @@ int parse_beatmap(char* file_buf, uint64_t file_size, beatmap_t* beatmap) {
 								double repeats=0,length=1;
 								if(sscanf(cursor, ",%lf,%lf", &repeats, &length) != 2) {
 									// Just keep going if we cant parse this
-									fprintf(stderr, "Failed to parse repeats and length for slider\n");
+									fprintf(stderr, "Failed to parse repeats and length for slider(%i)\n", type);
 								}
 
-								beatmap->hit_objs[beatmap->hit_objs_num] = (hit_obj_t){x,y,time,combo,hs,HIT_TYPE_SLIDER,stype,repeats,length};
+								beatmap->hit_objs[beatmap->hit_objs_num] = (hit_obj_t){x,y,time,HIT_TYPE_SLIDER,hs,stype,repeats,length};
+							} else if (type & HIT_TYPE_CIRCLE) {
+								beatmap->hit_objs[beatmap->hit_objs_num] = (hit_obj_t){x,y,time,HIT_TYPE_CIRCLE,hs,0,0,0};
+							} else if (type & HIT_TYPE_SPINNER) {
+								beatmap->hit_objs[beatmap->hit_objs_num] = (hit_obj_t){x,y,time,HIT_TYPE_SPINNER,hs,0,0,0};
 							} else {
-								beatmap->hit_objs[beatmap->hit_objs_num] = (hit_obj_t){x,y,time,combo,hs,HIT_TYPE_CIRCLE,0,0,0};
+								fprintf(stderr, "Uknown hit object detected, skipping it.\n");
+								continue;
 							}
 
 							beatmap->hit_objs_num++;
@@ -212,15 +217,17 @@ int parse_osz( const char* osz) {
 		printf("Parsing beatmap '%s'\n", stat.name);
 		parse_beatmap(file_buf, stat.size, &b);
 
-		int circles=0, sliders=0;
+		int circles=0, sliders=0, spinners=0;
 		for(int i = 0; i < b.hit_objs_num; ++i) {
 			if(b.hit_objs[i].type == HIT_TYPE_CIRCLE) {
 				circles++;
-			} else {
+			} else if(b.hit_objs[i].type == HIT_TYPE_SLIDER) {
 				sliders++;
+			} else {
+				spinners++;
 			}
 		}
-		printf("Map has %i circles and %i sliders\n", circles, sliders);
+		printf("Map has %i circles, %i sliders, %i spinners\n", circles, sliders, spinners);
 
 		free_beatmap_data(&b);
 		free(file_buf);
