@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
+#include <math.h>
 
 #include <zip.h> // libzip from https://nih.at/libzip relies on zlib
 
@@ -50,6 +51,75 @@ void free_beatmap_data(beatmap_t* b) {
 		if(b->name)
 			free(b->name);
 	}
+}
+
+const double circlesize_buff_treshold = 30;
+const double playfield_width = 512.0;
+double distance_normalizer(beatmap_t* b) {
+	double circle_radius = (playfield_width / 16.f) * (1.f - 0.7f / 5.f *(b->CS - 5.f));
+
+	// positions are normalized on circle radius so that we can calc as
+	// if everything was the same circlesize
+	double distance_scale = 52.0f / circle_radius;
+
+	// cs buff (credits to osuElements, I have confirmed that this is
+	// indeed accurate)
+	if (circle_radius < circlesize_buff_treshold) {
+		distance_scale *= 1.f + fmin((circlesize_buff_treshold - circle_radius), 5.f) / 50.f;
+	}
+
+	return distance_scale;
+}
+
+const double speed_decay = 0.3; // Decay of previous strain per second
+const double speed_base = 1400;
+// arbitrary tresholds to determine when a stream is spaced enough that is 
+// becomes hard to alternate.
+const double stream_spacing = 110;
+const double single_spacing = 125;
+// almost the normalized circle diameter (104px)
+const double almost_diameter = 90;
+double speed_strain(double prev_strain, double time_elapsed, double normalized_dist) {
+
+	double time_factor = 1.0f/fmax(50, time_elapsed);
+	double decay = pow(speed_decay, time_elapsed / 1000.0);
+
+	double dist_factor = 0.95;
+	if (normalized_dist > single_spacing) {
+		dist_factor = 2.5;
+	}
+	else if (normalized_dist > stream_spacing) {
+		dist_factor = 1.6 + 0.9 *
+			(normalized_dist - stream_spacing) /
+			(single_spacing - stream_spacing);
+	}
+	else if (normalized_dist > almost_diameter) {
+		dist_factor = 1.2 + 0.4 * (normalized_dist - almost_diameter)
+			/ (stream_spacing - almost_diameter);
+	}
+	else if (normalized_dist > almost_diameter / 2.0) {
+		dist_factor = 0.95 + 0.25 * 
+			(normalized_dist - almost_diameter / 2.0) /
+			(almost_diameter / 2.0);
+	}
+
+	double strain = speed_base*time_factor*dist_factor;
+	double total_strain = prev_strain*decay+strain;
+	return total_strain;
+}
+
+const double aim_decay = 0.15; // Decay of previous strain per second
+const double aim_base = 26.25;
+double aim_strain(double prev_strain, double time_elapsed, double normalized_dist) {
+	
+	double time_factor = 1.0f/fmax(50, time_elapsed);
+	double decay = pow(aim_decay, time_elapsed / 1000.0);
+
+	double dist_factor = pow(normalized_dist, 0.99);
+
+	double strain = aim_base*time_factor*dist_factor;
+	double total_strain = prev_strain*decay+strain;
+	return total_strain;
 }
 
 uint64_t zip_find_by_extension(zip_t* zip, uint64_t* ind_buf, size_t buff_size, const char* ext) {
@@ -256,18 +326,58 @@ int main(int argc, char** argv) {
 	parse_osz(argv[1], &osz);
 	parse_beatmap(&osz, 0, &b);
 
+	double* strains = malloc(sizeof(double)*2*b.hit_objs_num);
+	double dist_normalizer = distance_normalizer(&b);
 	int circles=0, sliders=0, spinners=0;
 	for(int i = 0; i < b.hit_objs_num; ++i) {
+		double time_elapsed = b.hit_objs[i].time - b.hit_objs[i-1].time;
+		double normalized_dist = sqrt(pow(b.hit_objs[i].x-b.hit_objs[i-1].x,2)+pow(b.hit_objs[i].y-b.hit_objs[i-1].y,2))*dist_normalizer;
 		if(b.hit_objs[i].type == HIT_TYPE_CIRCLE) {
+			double prev_aim_strain = strains[(i-1)*2];
+			strains[i*2] = i > 0 ? aim_strain(prev_aim_strain, time_elapsed, normalized_dist) : 0;
+			double prev_speed_strain = strains[(i-1)*2+1];
+			strains[i*2+1] = i > 0 ? speed_strain(prev_speed_strain, time_elapsed, normalized_dist) : 0;
 			circles++;
 		} else if(b.hit_objs[i].type == HIT_TYPE_SLIDER) {
+			double prev_aim_strain = strains[(i-1)*2];
+			strains[i*2] = i > 0 ? aim_strain(prev_aim_strain, time_elapsed, normalized_dist) : 0;
+			double prev_speed_strain = strains[(i-1)*2+1];
+			strains[i*2+1] = i > 0 ? speed_strain(prev_speed_strain, time_elapsed, normalized_dist) : 0;
 			sliders++;
 		} else {
 			spinners++;
 		}
+		// printf("Strains: (%6.2lf, %6.2lf)\n", strains[i*2], strains[i*2+1]);
 	}
 	printf("Map has %i circles, %i sliders, %i spinners\n", circles, sliders, spinners);
+	fflush(stdout);
 
+	if (b.hit_objs_num > 0) {
+		int window_size = 400; // 400ms
+		int window_pos = b.hit_objs[0].time;
+		int window_num = 0;
+		int num_windows = (int)ceil((b.hit_objs[b.hit_objs_num-1].time - b.hit_objs[0].time)/window_size);
+		double* window_maxes = malloc(sizeof(double)*num_windows);
+		if(window_maxes == NULL) { fprintf(stderr, "Failed to allocate bytes for window %i strains\n", num_windows); fflush(stderr); }
+		for(int i = 0; i < b.hit_objs_num; ++i) { // Windowing function to set max strain per window and decay previous max strain over empty windows.
+			while(window_pos+window_size < b.hit_objs[i].time) { //Next object was outside our window!
+				if(i < 1) {
+					window_maxes[window_num] = 0;
+				} else {
+					window_maxes[window_num] = strains[(i-1)*2] * pow(aim_decay, (window_pos+window_size - b.hit_objs[i-1].time) / 1000.0);
+				}
+				printf("%lf\n", window_maxes[window_num]);
+				window_pos += window_size;
+				window_num++;
+			}
+
+			window_maxes[window_num] = fmax(window_maxes[window_num], strains[(i-1)*2]);
+		}
+	}
+	
+
+
+	free(strains);
 	free_osz_data(&osz);
 	free_beatmap_data(&b);
 }
