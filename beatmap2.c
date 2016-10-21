@@ -327,7 +327,8 @@ int main(int argc, char** argv) {
 	parse_beatmap(&osz, 0, &b);
 
 	double* strains = malloc(sizeof(double)*2*b.hit_objs_num);
-	memset(strains, 1, sizeof(double)*2*b.hit_objs_num);
+	memset(strains, 0, sizeof(double)*2*b.hit_objs_num);
+	strains[0] = 1; strains[1] = 1; // Cant use memset on doubles... Doh
 	double dist_normalizer = distance_normalizer(&b);
 	int circles=0, sliders=0, spinners=0;
 	for(int i = 1; i < b.hit_objs_num; ++i) {
@@ -356,35 +357,39 @@ int main(int argc, char** argv) {
 
 	if (b.hit_objs_num > 0) {
 		int window_size = 400; // 400ms
-		int window_pos = b.hit_objs[0].time;
+		int window_pos =  0; // floor(b.hit_objs[0].time) - ((int)floor(b.hit_objs[0].time) % 400);
+		int window_start = window_pos; // Useful for debugging
 		int window_num = 0;
-		int num_windows = (int)ceil((b.hit_objs[b.hit_objs_num-1].time - b.hit_objs[0].time)/window_size);
+		int num_windows = (int)ceil((b.hit_objs[b.hit_objs_num-1].time - window_pos)/window_size);
 		double* window_maxes = malloc(sizeof(double)*2*num_windows);
-		memset(window_maxes, 0, sizeof(double)*2*num_windows);
+		double decayed_prev_strain_aim = 0, decayed_prev_strain_speed = 0;
 		if(window_maxes == NULL) { fprintf(stderr, "Failed to allocate bytes for window %i strains\n", num_windows); fflush(stderr); }
-		window_maxes[0] = 0;
-		window_maxes[0] = 0;
-		for(int i = 1; i < b.hit_objs_num; ++i) { // Windowing function to set max strain per window and decay previous max strain over empty windows.
+		memset(window_maxes, 0, sizeof(double)*2*num_windows);
+		
+
+		for(int i = 0; i < b.hit_objs_num; i++) { // Windowing function to set max strain per window and decay previous max strain over empty windows.
 			while(window_pos+window_size < b.hit_objs[i].time) { //Next object was outside our window!
-				window_maxes[window_num*2] = strains[(i-1)*2] * pow(aim_decay, (window_pos+window_size - b.hit_objs[i-1].time) / 1000.0);
-				window_maxes[window_num*2+1] = strains[(i-1)*2+1] * pow(speed_decay, (window_pos+window_size - b.hit_objs[i-1].time) / 1000.0);
+				if (i > 1) {
+					decayed_prev_strain_aim = strains[(i-1)*2] * pow(aim_decay, (window_pos+window_size - b.hit_objs[i-1].time) / 1000.0);
+					decayed_prev_strain_speed = strains[(i-1)*2+1] * pow(speed_decay, (window_pos+window_size - b.hit_objs[i-1].time) / 1000.0);
+				} else {
+					decayed_prev_strain_aim = strains[0];
+					decayed_prev_strain_speed = strains[1];
+				}
 				
 				window_pos += window_size;
 				window_num++;
+				window_maxes[window_num*2] = decayed_prev_strain_aim;
+				window_maxes[window_num*2+1] = decayed_prev_strain_speed;
 			}
-
-			window_maxes[window_num*2] = fmax(window_maxes[window_num*2], strains[(i-1)*2]);
-			window_maxes[window_num*2+1] = fmax(window_maxes[window_num*2+1], strains[(i-1)*2+1]);
+			window_maxes[window_num*2] = fmax(decayed_prev_strain_aim, strains[i*2]);
+			window_maxes[window_num*2+1] = fmax(decayed_prev_strain_speed, strains[i*2+1]);
 		}
 
 		for(int i = 0; i < window_num; i++) {
-			printf("%lf\t%lf\t%lf\n", i*400.0+b.hit_objs[0].time, window_maxes[i*2+1], window_maxes[i*2]);
+			printf("%lf\t%lf\t%lf\n", i*400.0+window_start+window_size, window_maxes[i*2], window_maxes[i*2+1]);
 		}
 	}
-
-
-	
-
 
 	free(strains);
 	free_osz_data(&osz);
