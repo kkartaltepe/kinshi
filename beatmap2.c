@@ -216,7 +216,7 @@ int parse_beatmap_data(char* file_buf, uint64_t file_size, beatmap_t* beatmap) {
 						cursor = strchr(cursor+1, *"\n");
 					} // No more hit objects, fall out to section parser.
 
-					printf("Parsed %lu hit objects\n", (long)beatmap->hit_objs_num);
+					// printf("Parsed %lu hit objects\n", (long)beatmap->hit_objs_num);
 				} else if(strcmp(section, "Difficulty") == 0) { // SECTION: Difficulty
 					char name[128];
 					double value;
@@ -241,7 +241,7 @@ int parse_beatmap_data(char* file_buf, uint64_t file_size, beatmap_t* beatmap) {
 						cursor = strchr(cursor+1, *"\n");
 					}
 
-					printf("Parsed beatmap difficulty ar:%lf, od:%lf, cs:%lf, hp:%lf\n", beatmap->AR, beatmap->OD, beatmap->CS, beatmap->HP);
+					// printf("Parsed beatmap difficulty ar:%lf, od:%lf, cs:%lf, hp:%lf\n", beatmap->AR, beatmap->OD, beatmap->CS, beatmap->HP);
 				} else {
 					// fprintf(stderr, "WARN: Unhandled section %s\n", section);
 				}
@@ -289,7 +289,7 @@ int parse_beatmap(osz_data_t* osz, uint64_t beatmap_num, beatmap_t* beatmap) {
 	
 	zip_fread(zip_file, file_buf, stat.size); // Slurp it up.
 	
-	printf("Parsing beatmap '%s'\n", stat.name);
+	// printf("Parsing beatmap '%s'\n", stat.name);
 	parse_beatmap_data(file_buf, stat.size, beatmap);
 
 	free(file_buf);
@@ -327,29 +327,31 @@ int main(int argc, char** argv) {
 	parse_beatmap(&osz, 0, &b);
 
 	double* strains = malloc(sizeof(double)*2*b.hit_objs_num);
+	memset(strains, 1, sizeof(double)*2*b.hit_objs_num);
 	double dist_normalizer = distance_normalizer(&b);
 	int circles=0, sliders=0, spinners=0;
-	for(int i = 0; i < b.hit_objs_num; ++i) {
+	for(int i = 1; i < b.hit_objs_num; ++i) {
 		double time_elapsed = b.hit_objs[i].time - b.hit_objs[i-1].time;
 		double normalized_dist = sqrt(pow(b.hit_objs[i].x-b.hit_objs[i-1].x,2)+pow(b.hit_objs[i].y-b.hit_objs[i-1].y,2))*dist_normalizer;
+		
+		double prev_aim_strain = strains[(i-1)*2];
+		strains[i*2] = aim_strain(prev_aim_strain, time_elapsed, normalized_dist);
+		double prev_speed_strain = strains[(i-1)*2+1];
+		strains[i*2+1] = speed_strain(prev_speed_strain, time_elapsed, normalized_dist);
+
 		if(b.hit_objs[i].type == HIT_TYPE_CIRCLE) {
-			double prev_aim_strain = strains[(i-1)*2];
-			strains[i*2] = i > 0 ? aim_strain(prev_aim_strain, time_elapsed, normalized_dist) : 0;
-			double prev_speed_strain = strains[(i-1)*2+1];
-			strains[i*2+1] = i > 0 ? speed_strain(prev_speed_strain, time_elapsed, normalized_dist) : 0;
 			circles++;
 		} else if(b.hit_objs[i].type == HIT_TYPE_SLIDER) {
-			double prev_aim_strain = strains[(i-1)*2];
-			strains[i*2] = i > 0 ? aim_strain(prev_aim_strain, time_elapsed, normalized_dist) : 0;
-			double prev_speed_strain = strains[(i-1)*2+1];
-			strains[i*2+1] = i > 0 ? speed_strain(prev_speed_strain, time_elapsed, normalized_dist) : 0;
 			sliders++;
 		} else {
 			spinners++;
 		}
-		// printf("Strains: (%6.2lf, %6.2lf)\n", strains[i*2], strains[i*2+1]);
 	}
-	printf("Map has %i circles, %i sliders, %i spinners\n", circles, sliders, spinners);
+	// printf("Map has %i circles, %i sliders, %i spinners\n", circles, sliders, spinners);
+	for(int i = 0; i < b.hit_objs_num; i++) {
+		printf("%lf\t%lf\t%lf\n", b.hit_objs[i].time, strains[i*2], strains[i*2+1]);
+	}
+	printf("\n\n");
 	fflush(stdout);
 
 	if (b.hit_objs_num > 0) {
@@ -357,23 +359,30 @@ int main(int argc, char** argv) {
 		int window_pos = b.hit_objs[0].time;
 		int window_num = 0;
 		int num_windows = (int)ceil((b.hit_objs[b.hit_objs_num-1].time - b.hit_objs[0].time)/window_size);
-		double* window_maxes = malloc(sizeof(double)*num_windows);
+		double* window_maxes = malloc(sizeof(double)*2*num_windows);
+		memset(window_maxes, 0, sizeof(double)*2*num_windows);
 		if(window_maxes == NULL) { fprintf(stderr, "Failed to allocate bytes for window %i strains\n", num_windows); fflush(stderr); }
-		for(int i = 0; i < b.hit_objs_num; ++i) { // Windowing function to set max strain per window and decay previous max strain over empty windows.
+		window_maxes[0] = 0;
+		window_maxes[0] = 0;
+		for(int i = 1; i < b.hit_objs_num; ++i) { // Windowing function to set max strain per window and decay previous max strain over empty windows.
 			while(window_pos+window_size < b.hit_objs[i].time) { //Next object was outside our window!
-				if(i < 1) {
-					window_maxes[window_num] = 0;
-				} else {
-					window_maxes[window_num] = strains[(i-1)*2] * pow(aim_decay, (window_pos+window_size - b.hit_objs[i-1].time) / 1000.0);
-				}
-				printf("%lf\n", window_maxes[window_num]);
+				window_maxes[window_num*2] = strains[(i-1)*2] * pow(aim_decay, (window_pos+window_size - b.hit_objs[i-1].time) / 1000.0);
+				window_maxes[window_num*2+1] = strains[(i-1)*2+1] * pow(speed_decay, (window_pos+window_size - b.hit_objs[i-1].time) / 1000.0);
+				
 				window_pos += window_size;
 				window_num++;
 			}
 
-			window_maxes[window_num] = fmax(window_maxes[window_num], strains[(i-1)*2]);
+			window_maxes[window_num*2] = fmax(window_maxes[window_num*2], strains[(i-1)*2]);
+			window_maxes[window_num*2+1] = fmax(window_maxes[window_num*2+1], strains[(i-1)*2+1]);
+		}
+
+		for(int i = 0; i < window_num; i++) {
+			printf("%lf\t%lf\t%lf\n", i*400.0+b.hit_objs[0].time, window_maxes[i*2+1], window_maxes[i*2]);
 		}
 	}
+
+
 	
 
 
