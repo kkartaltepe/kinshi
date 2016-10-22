@@ -183,7 +183,7 @@ int parse_beatmap_data(char* file_buf, uint64_t file_size, beatmap_t* beatmap) {
 					// sscanf(cursor+1, "%lf,%lf,%lf,%i,%i,%c%n", &x, &y, &time, &combo, &hs, &stype, &bytes_read);
 					// printf("%.20s consumes %i\n", cursor+1, bytes_read);
 					while(cursor != NULL && cursor < file_buf+file_size-1
-					      && sscanf(cursor+1, "%lf,%lf,%lf,%i,%i,%c%n", &x, &y, &time, &type, &hs, &stype, &bytes_read) == 6) {
+					      && sscanf(cursor+1, "%lf,%lf,%lf,%i,%i,%c%n", &x, &y, &time, &type, &hs, &stype, &bytes_read) >= 5) {
 						if(beatmap->hit_objs_num < MAX_HIT_OBJS) {
 							if(type & HIT_TYPE_SLIDER) {
 								cursor+=bytes_read+1;
@@ -243,7 +243,7 @@ int parse_beatmap_data(char* file_buf, uint64_t file_size, beatmap_t* beatmap) {
 
 					// printf("Parsed beatmap difficulty ar:%lf, od:%lf, cs:%lf, hp:%lf\n", beatmap->AR, beatmap->OD, beatmap->CS, beatmap->HP);
 				} else {
-					// fprintf(stderr, "WARN: Unhandled section %s\n", section);
+					// fprintf(stderr, "INFO: Unhandled section %s\n", section);
 				}
 
 			} else {
