@@ -1,9 +1,11 @@
 all: kinshi.exe compare_report.svg
 .PHONY: all
 
-kinshi.exe: beatmap2.c
-	gcc -std=c99 -Wall beatmap2.c -lzip -g3 -o kinshi.exe
+kinshi.exe: *.c *.h
+	gcc -std=c99 -Wall main.c -lzip -g3 -o kinshi.exe
 
-compare_report.svg: kinshi plot_data.gp diff2.dat oppai.dat
-	./a.exe /d/Downloads/477725\ AK\ X\ LYNX\ ft.\ Veela\ -\ Virtual\ Paradise.osz > diff2.dat
+kinshi.dat: kinshi.exe test.osz
+	./kinshi.exe test.osz > kinshi.dat
+
+compare_report.svg: kinshi plot_data.gp kinshi.dat oppai.dat
 	gnuplot -p plot_data.gp > compare_report.svg
