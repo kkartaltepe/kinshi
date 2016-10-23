@@ -80,7 +80,10 @@ int calc_agg_strains(beatmap_t* b, double* aim_strains, double* speed_strains, d
 	double decayed_prev_strain_aim = 0, decayed_prev_strain_speed = 0;
 
 	for(int i = 0; i < b->hit_objs_num; i++) { // Windowing function to set max strain per window and decay previous max strain over empty windows.
+		printf("parsing hit object: %i\n", i); fflush(stdout);
+		
 		while(window_start+window_size < b->hit_objs[i].time) { //Next object was outside our window!
+			printf("parsing window: %i\n", window_start); fflush(stdout);
 			if ( i > 0) {
 				decayed_prev_strain_aim = aim_strains[i-1] * pow(aim_decay, (window_start+window_size - b->hit_objs[i-1].time) / 1000.0);
 				decayed_prev_strain_speed = speed_strains[i-1] * pow(speed_decay, (window_start+window_size - b->hit_objs[i-1].time) / 1000.0);
@@ -88,9 +91,11 @@ int calc_agg_strains(beatmap_t* b, double* aim_strains, double* speed_strains, d
 			
 			window_start += window_size;
 			window_num++;
+			printf("assigning window: %i, %p, %p\n", window_num, window_aim_strains, window_speed_strains); fflush(stdout);
 			window_aim_strains[window_num] = decayed_prev_strain_aim;
 			window_speed_strains[window_num] = decayed_prev_strain_speed;
 		}
+		printf("assigning final for window: %i , %i\n", window_num, i); fflush(stdout);
 		window_aim_strains[window_num] = fmax(window_aim_strains[window_num], aim_strains[i]);
 		window_speed_strains[window_num] = fmax(window_speed_strains[window_num], speed_strains[i]);
 	}
